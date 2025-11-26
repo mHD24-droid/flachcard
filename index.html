@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI PDF Flashcard Generator</title>
+    <!-- Load Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* Tailwind gray-50 */
+        }
+        /* Ensure the body and html take up full height for min-h-screen to work */
+        html, body {
+            height: 100%;
+        }
+    </style>
+    
+    <!-- Load React and Babel (Crucial for running JSX directly) -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+    <div id="root">
+        <!-- Application will be rendered here -->
+        <div class="flex justify-center items-center min-h-screen">
+            <p class="text-xl text-indigo-600 animate-pulse">Loading Application...</p>
+        </div>
+    </div>
+
+    <!-- Load your App.jsx script using type="text/babel" -->
+    <script type="text/babel" src="./App.jsx"></script>
+
+    <script type="text/babel">
+        // 1. Get the App component from the global scope (created by App.jsx import)
+        // Note: The App.jsx file must attach the App component to window.App for this to work.
+        const App = window.App || window.default || window.App.default;
+        
+        if (App) {
+            // 2. Render the App component into the root element
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(<App />);
+        } else {
+             console.error("React component 'App' not found after loading App.jsx.");
+        }
+    </script>
+</body>
+</html>
