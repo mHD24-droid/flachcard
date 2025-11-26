@@ -4,46 +4,631 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI PDF Flashcard Generator</title>
-    <!-- Load Tailwind CSS CDN -->
+    
+    <!-- SECTION 1: STYLING -->
+    <!-- Loads Tailwind CSS and sets the modern "Inter" font -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Use Inter font -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f8fafc; /* Tailwind gray-50 */
-        }
-        /* Ensure the body and html take up full height for min-h-screen to work */
-        html, body {
+            background-color: #f8fafc;
             height: 100%;
         }
     </style>
     
-    <!-- Load React and Babel (Crucial for running JSX directly) -->
+    <!-- SECTION 2: THE TRANSLATORS -->
+    <!-- These scripts are essential to translate your JSX/React code -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
+    <!-- SECTION 3: THE CONTAINER -->
+    <!-- The content of your React App will appear inside this 'root' div -->
     <div id="root">
-        <!-- Application will be rendered here -->
+        <!-- Temporary loading message before React takes over -->
         <div class="flex justify-center items-center min-h-screen">
             <p class="text-xl text-indigo-600 animate-pulse">Loading Application...</p>
         </div>
     </div>
 
-    <!-- Load your App.jsx script using type="text/babel" -->
-    <script type="text/babel" src="./App.jsx"></script>
-
+    <!-- SECTION 4: LOAD & RUN YOUR CODE (App.jsx content merged here) -->
     <script type="text/babel">
-        // 1. Get the App component from the global scope (created by App.jsx import)
-        // Note: The App.jsx file must attach the App component to window.App for this to work.
-        const App = window.App || window.default || window.App.default;
+// --- App.jsx Content Starts Here ---
+// Removed the import statement because Babel Standalone in the browser context 
+// does not define 'require' for module resolution, and React/hooks are available globally.
+// import React, { useState, useEffect, useCallback, useMemo } from 'react';
+
+// --- API Configuration (Updated for OpenAI) ---
+// NOTE: The actual API key (sk-proj-...) is handled securely by the platform environment.
+// We use an empty string here as required.
+const apiKey = "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"; 
+const OPENAI_MODEL = "gpt-4-turbo"; 
+const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+const WRONG_CARD_REAPPEARANCE_DELAY = 15; // Reappear after this many correct/skipped cards
+
+// Structured JSON Schema for the desired output
+const flashcardSchema = {
+    type: "OBJECT",
+    properties: {
+        resumeSummary: { 
+            type: "STRING", 
+            description: "A professional, concise summary of the generated resume based on the provided text, using professional formatting and tone." 
+        },
+        flashcards: {
+            type: "ARRAY",
+            description: "An array of Q/A flashcards derived from important information in the text.",
+            items: {
+                type: "OBJECT",
+                properties: {
+                    id: { type: "STRING", description: "A unique identifier for the card (e.g., 'Q1')." },
+                    question: { type: "STRING", description: "The question for the flashcard." },
+                    answer: { type: "STRING", description: "The detailed answer to the question." },
+                    imageUrl: { 
+                        type: "STRING", 
+                        description: "A placeholder image URL relevant to the question (e.g., a diagram), otherwise null." 
+                    }
+                },
+                propertyOrdering: ["id", "question", "answer", "imageUrl"]
+            }
+        }
+    },
+    propertyOrdering: ["resumeSummary", "flashcards"]
+};
+
+// Default PDF text simulation for demo purposes
+// NOTE: We simulate the presence of an image/visual context here.
+const DEFAULT_PDF_TEXT = `
+  John Doe
+  Software Engineer - Full Stack Development
+  Email: john.doe@example.com | Phone: (555) 123-4567 | LinkedIn: linkedin.com/in/johndoe
+
+  [Image detected: A professional headshot of John Doe]
+
+  Summary:
+  Highly skilled Software Engineer with 5 years of experience in developing and deploying scalable web applications using React, Node.js, and MongoDB. Proven ability to lead projects from conception to launch.
+
+  Experience:
+  Senior Developer, Tech Innovators (2021 - Present)
+  - Led a team of 4 engineers in redesigning the core customer dashboard using React and Tailwind CSS, resulting in a 30% reduction in page load time.
+  - Implemented microservices architecture with Node.js, improving API response time by 45%.
+
+  Education:
+  M.S. in Computer Science, State University (2018)
+  B.S. in Electrical Engineering, Local College (2016)
+
+  Skills:
+  Frontend: React, JavaScript (ES6+), HTML5, CSS3, Tailwind CSS
+  Backend: Node.js, Express, MongoDB, PostgreSQL, REST APIs
+  Tools: Git, Docker, AWS (S3, EC2), JIRA
+`;
+
+const App = () => {
+    // FIX: Destructure React Hooks from the global React object
+    const { useState, useEffect, useCallback, useMemo } = React;
+    
+    const [pdfFileName, setPdfFileName] = useState(null);
+    const [generatedContent, setGeneratedContent] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [quizState, setQuizState] = useState({
+        flashcards: [],
+        wrongQueue: [],
+        currentCardIndex: 0,
+        correctCount: 0,
+        attemptedCount: 0,
+        totalCards: 0,
+        quizOver: false,
+    });
+    const [showAnswer, setShowAnswer] = useState(false);
+
+    // Initial state setup for auth/app context is omitted as this uses in-memory state.
+    // For production, the user data would typically be managed here.
+
+    const { 
+        flashcards, 
+        wrongQueue, 
+        currentCardIndex, 
+        correctCount, 
+        attemptedCount, 
+        totalCards, 
+        quizOver 
+    } = quizState;
+
+    const currentCard = useMemo(() => {
+        if (currentCardIndex < flashcards.length) {
+            return flashcards[currentCardIndex];
+        }
+        return null;
+    }, [currentCardIndex, flashcards]);
+
+    const isRetryCard = useMemo(() => {
+        if (currentCard) {
+            return currentCard.isRetry;
+        }
+        return false;
+    }, [currentCard]);
+
+    // Score calculation
+    const score = totalCards > 0 
+        ? Math.round((correctCount / totalCards) * 100)
+        : 0;
+
+    // --- File Handling and Content Generation ---
+
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            setPdfFileName(file.name);
+            // In a real React Native app, we would use a library 
+            // to extract text here. For the web simulation, 
+            // we use the default simulated text.
+            const simulatedText = DEFAULT_PDF_TEXT; 
+            generateContent(simulatedText);
+        }
+    };
+
+    const generateContent = useCallback(async (textToAnalyze) => {
+        setIsLoading(true);
+        setError(null);
+        setGeneratedContent(null);
+        setQuizState(prev => ({
+            ...prev, 
+            flashcards: [], 
+            wrongQueue: [], 
+            currentCardIndex: 0, 
+            correctCount: 0, 
+            attemptedCount: 0,
+            totalCards: 0,
+            quizOver: false,
+        }));
+
+        const systemPrompt = `You are an expert resume analyst and flashcard generator. Your task is to analyze the following extracted PDF text, which may include image context.
+1. Generate a professional 'resumeSummary'.
+2. Identify key pieces of information (up to 450 maximum) and convert them into Q/A flashcards.
+3. If the extracted text mentions an image or visual element that is crucial to the fact (e.g., a diagram or specific logo), provide a relevant placeholder image URL in the 'imageUrl' field using the format: https://placehold.co/150x150/000000/FFFFFF?text=IMAGE_CONTEXT (replace IMAGE_CONTEXT with the visual context, URL encoding spaces as '+' or '%20'). If no visual context is needed, set 'imageUrl' to null.
+4. IMPORTANT: You MUST respond ONLY with a single JSON object that strictly adheres to the provided schema. Do not include any explanation or markdown formatting outside the JSON object.`;
+
+        const userQuery = `Analyze the following text and generate the structured output: \n\n--- TEXT ---\n${textToAnalyze}`;
+
+        const payload = {
+            model: OPENAI_MODEL,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userQuery }
+            ],
+            // Use response_format for strict JSON output in OpenAI
+            response_format: { type: "json_object" }, 
+            temperature: 0.5,
+        };
         
-        if (App) {
-            // 2. Render the App component into the root element
+        // Define the headers for the OpenAI API
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+        };
+
+
+        let finalResult = null;
+        let retries = 0;
+        const maxRetries = 5;
+        let delay = 1000;
+
+        while (retries < maxRetries) {
+            try {
+                const response = await fetch(OPENAI_API_URL, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API returned status ${response.status}`);
+                }
+
+                const result = await response.json();
+                
+                // Parse response structure for OpenAI
+                const jsonText = result.choices?.[0]?.message?.content;
+                
+                if (!jsonText) {
+                    const errorMessage = result.error?.message || "API response was empty or malformed.";
+                    throw new Error(errorMessage);
+                }
+                
+                // Attempt to parse the JSON
+                const parsedContent = JSON.parse(jsonText);
+                finalResult = parsedContent;
+                break; // Success
+
+            } catch (err) {
+                console.error(`Attempt ${retries + 1} failed:`, err);
+                retries++;
+                if (retries < maxRetries) {
+                    // Exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2;
+                } else {
+                    setError(`Failed to generate content after ${maxRetries} attempts. Error: ${err.message}`);
+                }
+            }
+        }
+
+        if (finalResult) {
+            setGeneratedContent(finalResult);
+            if (finalResult.flashcards && finalResult.flashcards.length > 0) {
+                // Apply the 450 card limit defensively on the client side just in case
+                const limitedFlashcards = finalResult.flashcards.slice(0, 450); 
+
+                setQuizState(prev => ({
+                    ...prev,
+                    flashcards: limitedFlashcards.map(card => ({
+                        ...card,
+                        originalIndex: prev.flashcards.length + card.id // Use unique index for tracking
+                    })),
+                    totalCards: limitedFlashcards.length,
+                }));
+            }
+        }
+
+        setIsLoading(false);
+    }, []);
+
+    // --- Quiz Logic ---
+
+    const moveToNextCard = useCallback(() => {
+        setShowAnswer(false);
+        setQuizState(prev => {
+            let nextIndex = prev.currentCardIndex + 1;
+            let newFlashcards = [...prev.flashcards];
+            let newWrongQueue = [...prev.wrongQueue];
+            let newAttemptedCount = prev.attemptedCount + 1;
+
+            let quizIsOver = false;
+
+            if (nextIndex >= newFlashcards.length) {
+                // If we ran out of current cards, check the wrong queue
+                if (newWrongQueue.length > 0) {
+                    // Re-insert wrong cards at the specified delay point
+                    const cardsToReinsert = newWrongQueue.filter(card => 
+                        newAttemptedCount - card.failAttempt >= WRONG_CARD_REAPPEARANCE_DELAY
+                    );
+
+                    if (cardsToReinsert.length > 0) {
+                        const reinsertedCard = cardsToReinsert[0];
+                        // Remove from queue
+                        newWrongQueue = newWrongQueue.filter(c => c.id !== reinsertedCard.id);
+                        // Add to the end of the current deck
+                        newFlashcards.push({ ...reinsertedCard, isRetry: true });
+                        nextIndex = prev.currentCardIndex; // Stay on the current index to show the newly added card
+                    } else {
+                         // No wrong cards ready to reappear, check if all original cards are done
+                        if (prev.wrongQueue.length === 0) {
+                            quizIsOver = true;
+                        }
+                    }
+                } else {
+                    // No more cards, quiz is over
+                    quizIsOver = true;
+                }
+            }
+            
+            if (quizIsOver) {
+                return { ...prev, quizOver: true };
+            }
+
+            return {
+                ...prev,
+                flashcards: newFlashcards,
+                wrongQueue: newWrongQueue,
+                currentCardIndex: nextIndex,
+                attemptedCount: newAttemptedCount,
+            };
+        });
+    }, [quizState]);
+
+    const handleCorrect = () => {
+        // Remove the card from the wrongQueue if it was a retry
+        setQuizState(prev => {
+            const isRetry = prev.flashcards[prev.currentCardIndex].isRetry;
+            let newWrongQueue = [...prev.wrongQueue];
+
+            if (isRetry) {
+                 newWrongQueue = newWrongQueue.filter(c => c.id !== prev.flashcards[prev.currentCardIndex].id);
+            }
+
+            return {
+                ...prev,
+                correctCount: prev.correctCount + 1,
+                wrongQueue: newWrongQueue,
+            };
+        });
+        moveToNextCard();
+    };
+
+    const handleWrong = () => {
+        setQuizState(prev => {
+            const card = prev.flashcards[prev.currentCardIndex];
+            
+            // Check if the card is already in the wrong queue
+            const existingIndex = prev.wrongQueue.findIndex(c => c.id === card.id);
+            let newWrongQueue = [...prev.wrongQueue];
+
+            if (existingIndex === -1) {
+                // First time wrong, add to queue
+                newWrongQueue.push({ ...card, failAttempt: prev.attemptedCount + 1 });
+            } else {
+                // Already failed before, just update the fail attempt time
+                newWrongQueue[existingIndex] = { ...newWrongQueue[existingIndex], failAttempt: prev.attemptedCount + 1 };
+            }
+
+            return {
+                ...prev,
+                wrongQueue: newWrongQueue
+            };
+        });
+        moveToNextCard();
+    };
+
+    const handleSkip = () => {
+        moveToNextCard();
+    };
+
+    const handleKeyDown = useCallback((event) => {
+        if (!currentCard || quizOver) return;
+
+        if (event.key === ' ' || event.key === 'Enter') {
+            event.preventDefault();
+            setShowAnswer(prev => !prev);
+        } else if (showAnswer) {
+            if (event.key === 'ArrowRight') { // Correct
+                event.preventDefault();
+                handleCorrect();
+            } else if (event.key === 'ArrowLeft') { // Wrong
+                event.preventDefault();
+                handleWrong();
+            } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { // Skip
+                event.preventDefault();
+                handleSkip();
+            }
+        }
+    }, [currentCard, quizOver, showAnswer, handleCorrect, handleWrong, handleSkip]);
+
+    useEffect(() => {
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleKeyDown]);
+
+
+    // --- UI Components ---
+
+    const FileUploadSection = () => (
+        <div className="p-6 bg-white rounded-xl shadow-lg space-y-4">
+            <h2 className="text-xl font-bold text-gray-800">1. Import PDF & Generate Content</h2>
+            <p className="text-sm text-gray-500">
+                (Note: Due to sandbox limitations, PDF content extraction is simulated. Your file name will be shown, and the AI will process mock resume data, including a simulated image context.)
+            </p>
+            <label className="block">
+                <span className="sr-only">Choose PDF file</span>
+                <input 
+                    type="file" 
+                    accept="application/pdf" 
+                    onChange={handleFileChange} 
+                    className="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4
+                        file:rounded-full file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-indigo-50 file:text-indigo-700
+                        hover:file:bg-indigo-100"
+                    disabled={isLoading}
+                />
+            </label>
+            {pdfFileName && (
+                <p className="text-sm text-green-600">File selected: <span className="font-medium">{pdfFileName}</span>. Processing with AI...</p>
+            )}
+        </div>
+    );
+
+    const ResumeSummary = () => (
+        <div className="p-6 bg-white rounded-xl shadow-lg space-y-4">
+            <h2 className="text-xl font-bold text-indigo-700">2. Generated Resume Summary</h2>
+            <div className="border border-indigo-200 bg-indigo-50 p-4 rounded-lg">
+                <p className="whitespace-pre-wrap text-gray-700">{generatedContent.resumeSummary}</p>
+            </div>
+            <p className="text-sm text-gray-500 mt-4">
+                <span className="font-semibold">Flashcards Generated:</span> {quizState.totalCards} Q/A pairs (Max 450).
+            </p>
+        </div>
+    );
+
+    const Flashcard = ({ card, isRetry }) => {
+        // Red color for retry cards (wrong answers)
+        const cardClass = isRetry ? "border-red-500 bg-red-50 shadow-red-300" : "border-indigo-500 bg-white shadow-indigo-300";
+        const titleColor = isRetry ? "text-red-700" : "text-indigo-700";
+        const subtitleColor = isRetry ? "text-red-900" : "text-gray-900";
+
+        return (
+            <div 
+                className={`w-full min-h-[300px] border-4 rounded-xl shadow-2xl p-6 transition-all duration-300 transform perspective-1000 ${cardClass} relative`}
+                onClick={() => setShowAnswer(prev => !prev)}
+            >
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className={`text-xl font-extrabold ${titleColor}`}>{isRetry ? "🔥 RETRY CARD 🔥" : "Flashcard"}</h3>
+                    <span className="text-sm font-mono text-gray-500">{card.id}</span>
+                </div>
+                
+                <div className="flex flex-col items-center justify-center h-full min-h-[200px]">
+                    <p className={`text-center text-lg md:text-2xl font-semibold mb-6 ${subtitleColor} transition-all duration-500`}>
+                        {showAnswer ? "✅ Answer:" : "❓ Question:"}
+                    </p>
+                    
+                    {/* Image rendering based on imageUrl field */}
+                    {card.imageUrl && (
+                        <img 
+                            src={card.imageUrl} 
+                            alt="Visual context for the flashcard" 
+                            className="mb-4 rounded-lg shadow-md max-h-32 w-auto object-contain border border-gray-200"
+                            onError={(e) => { e.target.onerror = null; e.target.src="https://placehold.co/150x150/94A3B8/FFFFFF?text=Image+Unavailable" }}
+                        />
+                    )}
+
+                    <p className={`text-center text-xl md:text-3xl font-bold ${subtitleColor}`}>
+                        {showAnswer ? card.answer : card.question}
+                    </p>
+                </div>
+
+                <p className="absolute bottom-4 right-4 text-xs text-gray-400">
+                    Click card or press SPACE/ENTER to flip.
+                </p>
+            </div>
+        );
+    };
+
+    const QuizController = () => {
+        if (!currentCard) {
+            return (
+                <div className="p-6 text-center text-gray-500">
+                    <p>
+                        {totalCards === 0 && generatedContent ? "No flashcards were generated." : "Please upload a PDF to begin the quiz."}
+                    </p>
+                </div>
+            );
+        }
+
+        const wrongQueueCount = wrongQueue.length;
+        // Approximate number of unique cards seen + cards in the wrong queue
+        const cardsSeen = totalCards - wrongQueue.length;
+
+        return (
+            <div className="space-y-6">
+                <h2 className="text-2xl font-bold text-center text-gray-800">3. Flashcard Quiz</h2>
+
+                <div className="flex justify-center space-x-4 text-sm font-medium">
+                    <div className="p-2 px-4 bg-gray-100 rounded-full shadow-inner">
+                        Unique Cards Seen: {cardsSeen} / {totalCards}
+                    </div>
+                    <div className="p-2 px-4 bg-gray-100 rounded-full shadow-inner">
+                        Wrong Queue: {wrongQueueCount} cards
+                    </div>
+                </div>
+
+                <Flashcard card={currentCard} isRetry={isRetryCard} />
+                
+                <div className="flex flex-col sm:flex-row justify-center space-y-3 sm:space-y-0 sm:space-x-4">
+                    <button 
+                        onClick={handleSkip} 
+                        className="flex-1 max-w-[200px] mx-auto sm:max-w-none px-6 py-3 bg-gray-500 text-white font-bold rounded-xl shadow-lg hover:bg-gray-600 transition duration-150 transform hover:scale-[1.02]"
+                    >
+                        ⏭️ Skip (UP/DOWN)
+                    </button>
+                    
+                    {showAnswer && (
+                        <>
+                            <button 
+                                onClick={handleWrong} 
+                                className="flex-1 max-w-[200px] mx-auto sm:max-w-none px-6 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 transition duration-150 transform hover:scale-[1.02]"
+                            >
+                                ❌ Wrong (LEFT Arrow)
+                            </button>
+                            <button 
+                                onClick={handleCorrect} 
+                                className="flex-1 max-w-[200px] mx-auto sm:max-w-none px-6 py-3 bg-green-600 text-white font-bold rounded-xl shadow-lg hover:bg-green-700 transition duration-150 transform hover:scale-[1.02]"
+                            >
+                                ✅ Correct (RIGHT Arrow)
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    const QuizResults = () => (
+        <div className="p-8 bg-white rounded-xl shadow-2xl text-center space-y-4">
+            <h2 className="text-3xl font-extrabold text-indigo-700">Quiz Complete! 🎉</h2>
+            <p className="text-lg text-gray-600">You have completed all {totalCards} unique flashcards.</p>
+            
+            <div className={`p-4 mx-auto w-48 rounded-full shadow-inner ${score === 100 ? 'bg-green-100' : 'bg-yellow-100'}`}>
+                <p className="text-4xl font-black text-gray-800">{score}/100</p>
+            </div>
+
+            <p className="text-md text-gray-700">
+                You scored {score}/100. You answered <span className="font-bold text-green-600">{correctCount}</span> questions correctly out of {totalCards} unique questions.
+            </p>
+            <button 
+                onClick={() => window.location.reload()} 
+                className="mt-4 px-8 py-3 bg-indigo-600 text-white font-bold rounded-full shadow-md hover:bg-indigo-700 transition duration-150"
+            >
+                Start New Session
+            </button>
+        </div>
+    );
+
+    return (
+        <div className="min-h-screen bg-gray-50 font-sans p-4 sm:p-8">
+            <header className="text-center mb-8">
+                <h1 className="text-4xl font-extrabold text-gray-900">
+                    AI PDF Resume & Flashcard Generator
+                </h1>
+                <p className="text-indigo-600 mt-2">Web Simulation of a React Native Study App (Powered by OpenAI)</p>
+            </header>
+
+            <div className="max-w-4xl mx-auto space-y-10">
+                <FileUploadSection />
+                
+                {isLoading && (
+                    <div className="flex justify-center items-center p-8 bg-white rounded-xl shadow-lg">
+                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span className="text-indigo-600 font-medium">Generating Resume and Flashcards with AI...</span>
+                    </div>
+                )}
+
+                {error && (
+                    <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg" role="alert">
+                        <p className="font-bold">Error:</p>
+                        <p>{error}</p>
+                    </div>
+                )}
+
+                {generatedContent && generatedContent.resumeSummary && (
+                    <ResumeSummary />
+                )}
+
+                {generatedContent && generatedContent.flashcards && generatedContent.flashcards.length > 0 && (
+                    <div className="p-6 bg-white rounded-xl shadow-lg">
+                        {quizOver ? (
+                            <QuizResults />
+                        ) : (
+                            <QuizController />
+                        )}
+                    </div>
+                )}
+            </div>
+            
+            <footer className="text-center mt-10 p-4 text-sm text-gray-400">
+                <p>Use keyboard arrows (LEFT/RIGHT for correct/wrong, UP/DOWN for skip) or click the card to flip.</p>
+            </footer>
+        </div>
+    );
+};
+
+// Export for module systems (Webpack/Vite) AND expose globally for simple browser/Babel script loading
+window.App = App;
+// export default App; // Not needed when embedded directly
+
+// --- App.jsx Content Ends Here ---
+
+        // Get the App component that App.jsx exposed globally (now window.App)
+        const RootApp = window.App;
+        
+        if (RootApp) {
+            // Tell React to start managing the content inside the 'root' div.
             const root = ReactDOM.createRoot(document.getElementById('root'));
-            root.render(<App />);
+            root.render(<RootApp />);
         } else {
              console.error("React component 'App' not found after loading App.jsx.");
         }
