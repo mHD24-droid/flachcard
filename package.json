@@ -1,0 +1,17 @@
+{
+  "name": "pdf-flashcard-generator",
+  "version": "1.0.0",
+  "description": "AI-powered PDF analysis and flashcard generator using React and OpenAI.",
+  "private": true,
+  "scripts": {
+    "start": "echo 'This app is designed to be hosted statically.'",
+    "build": "echo 'No complex build required for single-file deployment.'"
+  },
+  "keywords": [
+    "react",
+    "openai",
+    "github-pages"
+  ],
+  "author": "",
+  "license": "ISC"
+}
